@@ -35,6 +35,7 @@ MODEL_LAYERS = {
     "llama_3_1_70b":   "32-37",   # 80 layers total
     "deepseek_r1_32b": "26-30",   # 64 layers total
     "gpt_oss_20b":     "10-14",   # 24 layers total
+    "deepseek_r1_7b": "12-16",   # 28 layers total
 }
 
 
