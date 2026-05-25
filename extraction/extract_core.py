@@ -178,7 +178,8 @@ def load_model(model_name: str, quantise: str | None = None):
         kwargs["torch_dtype"] = torch.bfloat16
         kwargs["max_memory"] = {0: "22GiB", 1: "22GiB", "cpu": "64GiB"}
     else:
-        print(f"Loading model: {model_name} (device_map=auto)")
+        print(f"Loading model: {model_name} (device_map=auto, capped)")
+        kwargs["max_memory"] = {0: "66GiB", "cpu": "120GiB"}
 
     model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
     model.eval()
