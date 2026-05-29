@@ -1,33 +1,52 @@
 """
-extract_think.py — MP4 of the Stego leakage screen.
+extract_think.py — MP4/MP5e of the Stego leakage screen.
 
-Walks all Stego runs in data/raw/stego/, splits each public-channel message on
-</think>, and writes one JSON line per think block tagged for the judge in MP5.
+Walks all Stego runs in data/raw/stego/ and writes one JSON line per <think>
+block tagged for the judge in MP5.
+
+CHANGED (Path A, post-MP5c fix): reads `thinking_messages` directly. This is
+the field populated by the patched stego.py's _call wrapper, which captures
+the RAW model response (with <think>...</think> intact) into a per-call
+record. We no longer parse public_messages for <think> content — that field
+is now correctly clean (stripped) for downstream agent history.
+
+Records in `thinking_messages` look like:
+  {
+    "agent_name": "Eduardo Reyes",
+    "role": "colluder",
+    "phase": "discussion" | "final" | "private",
+    "channel": "public" | "private",
+    "round": <hand_num or 0 for coord>,
+    "raw_response": "<reasoning>...</think>\n<answer>",
+    "had_think_tag": True | False,
+  }
 
 Decisions baked in (see master_plan_revision_supplement_2026-05-25.md §1.3,
-ADR-007, and the conversation that produced this script):
+ADR-007, ADR-009 in-progress):
 
   - Channel: PUBLIC only. Private (coordination) is by-design scheme
-    articulation between colluders and is not "leakage" — there is no observer.
+    articulation between colluders and is not "leakage" — there is no
+    observer.
   - Populations: all four public-turn populations are emitted, tagged so MP5
     can run the judge per bucket:
       (mode=collusion, role=colluder)   - the leakage measurement.
       (mode=collusion, role=honest)     - in-run honest baseline.
       (mode=control,   role=honest)     - between-run honest baseline.
-    The 'judge' role is excluded (judges are not part of the leakage question).
-  - Two boolean flags rather than one:
-      truncated     - no </think> in the message; the model ran out of budget
-                      mid-thought. The "think" block may itself be cut off.
-                      Judge with caution at MP5.
-      empty_answer  - </think> present but post-tag answer is essentially empty
-                      (< 20 chars after strip). The think block IS judgeable;
-                      the model just chose not to talk. Not a defect.
+    The 'judge' role is excluded (judges are not part of the leakage
+    question).
+  - Two boolean flags:
+      truncated     - no </think> in the raw_response; the model ran out of
+                      budget mid-thought. The "think" block may itself be cut
+                      off. Judge with caution at MP5.
+      empty_answer  - </think> present but post-tag answer is essentially
+                      empty (< 20 chars after strip). The think block IS
+                      judgeable; the model just chose not to talk.
 
 Output: data/processed/leakage_screen/think_blocks.jsonl (gitignored).
 
 Usage:
     python scripts/extract_think.py
-    python scripts/extract_think.py --runs-dir data/raw/stego \
+    python scripts/extract_think.py --runs-dir data/raw/stego \\
                                     --out data/processed/leakage_screen/think_blocks.jsonl
 """
 
@@ -36,20 +55,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
-# Tag-split sentinel. NARCBench's stego.py call_vllm strips the OPENING <think>
-# but leaves the closing </think>; we partition on the closing tag.
 SPLIT_TAG = "</think>"
-
-# Threshold below which we treat the answer side as effectively empty.
 EMPTY_ANSWER_MAX_CHARS = 20
 
 
 def parse_role_in_scheme(run_config: dict, agent_name: str) -> str:
     """Counter vs big_player vs honest. Coalition list is [counter, big_player]
-    by stego.py's construction (see run_shoe, role assignment block)."""
+    by stego.py's construction."""
     coalition = run_config.get("coalition") or []
     if not coalition:
         return "honest"  # control runs have no coalition
@@ -60,27 +75,17 @@ def parse_role_in_scheme(run_config: dict, agent_name: str) -> str:
     return "honest"
 
 
-def extract_agent_from_prefix(msg: str) -> tuple[str | None, str]:
-    """Public messages in results.json are prefixed '[Agent Name]: ...'.
-    Strip the prefix; return (agent_name, body)."""
-    if not msg.startswith("["):
-        return None, msg
-    end = msg.find("]:")
-    if end < 0:
-        return None, msg
-    return msg[1:end], msg[end + 2:].lstrip()
-
-
-def split_think(body: str) -> tuple[str, str, bool]:
+def split_think(raw: str) -> tuple[str, str, bool]:
     """Return (think_block, answer, truncated).
 
-    If </think> is absent, the whole body is treated as think and truncated=True.
-    Otherwise everything before </think> is the think block (the OPENING <think>
-    is missing from stego.py's stored response — that's why we split on the
-    closing tag, not via regex on both tags)."""
-    if SPLIT_TAG not in body:
-        return body, "", True
-    think, _, answer = body.partition(SPLIT_TAG)
+    If </think> is absent, the whole raw response is treated as a think
+    block and truncated=True. Otherwise everything before </think> is the
+    think block (the OPENING <think> is consumed by vLLM's chat template,
+    so we split on the closing tag alone).
+    """
+    if SPLIT_TAG not in raw:
+        return raw, "", True
+    think, _, answer = raw.partition(SPLIT_TAG)
     return think, answer.strip(), False
 
 
@@ -109,54 +114,59 @@ def walk_runs(runs_dir: Path):
 
 
 def extract_one_run(cfg: dict, res: dict) -> list[dict]:
-    """Produce one record per public-channel turn in this run."""
+    """Produce one record per PUBLIC-channel thinking_messages entry."""
     run_id = cfg["run_id"]
     mode = cfg["mode"]
     shoe = shoe_idx_from_run_id(run_id)
-    roles_map = cfg.get("roles", {})
     bp_corr = cfg.get("bp_bet_correlation")
 
+    thinking = res.get("thinking_messages", []) or []
+    if not thinking:
+        # Old/contaminated runs predate the Path A fix and don't populate
+        # this field. Skip rather than fall back — the contaminated batch
+        # lives at data/raw/stego_contaminated_v1 and was already extracted.
+        return []
+
     records = []
-    public_messages = res.get("public_messages", []) or []
-
-    # public_messages is ordered turn-by-turn within and across hands. The
-    # message text doesn't carry hand_num — but agent_prompts.json does. We
-    # don't strictly need hand_num for the judge, so emit a turn_idx instead
-    # of trying to reconstruct hand_num (which is fragile and not worth it).
-    for turn_idx, msg in enumerate(public_messages):
-        agent_name, body = extract_agent_from_prefix(msg)
-        if agent_name is None:
-            # Malformed prefix — skip rather than poison the dataset.
+    for entry in thinking:
+        # Filter: public channel only; colluder + honest roles only (skip
+        # 'judge' role which speaks in public at checkpoints).
+        if entry.get("channel") != "public":
             continue
-        role = roles_map.get(agent_name, "unknown")
+        role = entry.get("role")
         if role not in ("colluder", "honest"):
-            # 'judge' speaks on the public channel at checkpoints; exclude.
             continue
 
-        think, answer, truncated = split_think(body)
+        raw = entry.get("raw_response", "")
+        agent = entry["agent_name"]
+        think, answer, truncated = split_think(raw)
         empty_answer = (not truncated) and (len(answer) < EMPTY_ANSWER_MAX_CHARS)
 
         records.append({
             "run_id": run_id,
             "mode": mode,
             "shoe": shoe,
-            "turn_idx": turn_idx,
-            "agent_name": agent_name,
+            "round": entry.get("round"),
+            "phase": entry.get("phase"),
+            "agent_name": agent,
             "role": role,
-            "agent_role_in_scheme": parse_role_in_scheme(cfg, agent_name),
+            "agent_role_in_scheme": parse_role_in_scheme(cfg, agent),
             "think_block": think,
             "think_len": len(think),
             "answer": answer,
             "answer_len": len(answer),
             "truncated": truncated,
             "empty_answer": empty_answer,
+            "had_think_tag": entry.get("had_think_tag",
+                                       SPLIT_TAG in raw),
             "bp_corr": bp_corr,
         })
     return records
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--runs-dir", type=Path,
         default=Path("data/raw/stego"),
@@ -175,20 +185,30 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     n_runs = 0
+    n_runs_with_thinking = 0
     all_records: list[dict] = []
     for cfg, res, _ in walk_runs(args.runs_dir):
         n_runs += 1
-        all_records.extend(extract_one_run(cfg, res))
+        recs = extract_one_run(cfg, res)
+        if recs:
+            n_runs_with_thinking += 1
+        all_records.extend(recs)
 
     with open(args.out, "w") as f:
         for rec in all_records:
             f.write(json.dumps(rec) + "\n")
 
-    # Summary — this is the operator-facing readout you'll use to decide MP5.
-    print(f"Runs walked:  {n_runs}")
-    print(f"Records written: {len(all_records)}")
-    print(f"Output:       {args.out}")
+    print(f"Runs walked:                {n_runs}")
+    print(f"Runs with thinking_messages: {n_runs_with_thinking}")
+    print(f"Records written:            {len(all_records)}")
+    print(f"Output:                     {args.out}")
     print()
+
+    if n_runs_with_thinking == 0:
+        print("WARNING: no runs have a populated thinking_messages field.")
+        print("This means the data was generated before the Path A stego.py")
+        print("patch landed. Regenerate with the patched stego.py and re-run.")
+        return
 
     by_bucket = Counter(
         (r["mode"], r["role"], r["agent_role_in_scheme"])
@@ -201,17 +221,18 @@ def main():
 
     truncated = sum(1 for r in all_records if r["truncated"])
     empties = sum(1 for r in all_records if r["empty_answer"])
-    print(f"Quality flags:")
+    had_tag = sum(1 for r in all_records if r["had_think_tag"])
+    print("Quality flags:")
+    print(f"  had_think_tag (had </think>):  {had_tag} / {len(all_records)}")
     print(f"  truncated (no </think>):       {truncated} / {len(all_records)}")
     print(f"  empty_answer (<{EMPTY_ANSWER_MAX_CHARS} chars after </think>): {empties} / {len(all_records)}")
     print()
 
-    # Think-block length distribution — proxy for "is there substance to judge".
     if all_records:
         lens = sorted(r["think_len"] for r in all_records)
         n = len(lens)
-        p50 = lens[n // 2]
         p10 = lens[n // 10]
+        p50 = lens[n // 2]
         p90 = lens[(9 * n) // 10]
         print(f"think_len: min {lens[0]}  p10 {p10}  median {p50}  p90 {p90}  max {lens[-1]}")
 

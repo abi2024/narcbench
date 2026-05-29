@@ -710,10 +710,37 @@ def format_betting_summary(all_bets: dict[str, list[int]], player_names: list[st
 # vLLM API
 # ---------------------------------------------------------------------------
 
+def _strip_think(content: str) -> str:
+    """Strip any <think>...</think> prefix; return only the post-</think> answer.
+    Qwen3 thinking models emit </think> even with enable_thinking=False, and the
+    OPENING <think> tag is consumed by vLLM's chat template, so we split on the
+    closing tag alone. Returns the original content if no </think> is present."""
+    if "</think>" in content:
+        return content.split("</think>", 1)[1].strip()
+    return content
+
+
 def call_vllm(system: str, user: str, base_url: str = BASE_URL,
               model: str = MODEL, temperature: float = TEMPERATURE,
               max_tokens: int = MAX_TOKENS_CHAT,
               thinking: bool = False) -> str:
+    """Backward-compatible: returns the stripped (post-</think>) content."""
+    _, stripped = call_vllm_with_raw(
+        system, user, base_url=base_url, model=model,
+        temperature=temperature, max_tokens=max_tokens, thinking=thinking,
+    )
+    return stripped
+
+
+def call_vllm_with_raw(system: str, user: str, base_url: str = BASE_URL,
+                       model: str = MODEL, temperature: float = TEMPERATURE,
+                       max_tokens: int = MAX_TOKENS_CHAT,
+                       thinking: bool = False) -> tuple[str, str]:
+    """Return (raw_content, stripped_content).
+
+    raw_content: full response including any <think>...</think> block.
+    stripped_content: post-</think> answer only (or original if no </think>).
+    """
     payload = {
         "model": model,
         "messages": [
@@ -724,29 +751,15 @@ def call_vllm(system: str, user: str, base_url: str = BASE_URL,
         "temperature": temperature,
         "chat_template_kwargs": {"enable_thinking": thinking},
     }
-    # GPT-OSS reasons by default into a separate field. Stego chat turns are
-    # longer than Core's (table talk + decode hints), so give it medium
-    # reasoning and a 2048-token budget to minimise null-content returns.
     if "gpt-oss" in model.lower():
         payload["reasoning_effort"] = "medium"
         payload["max_tokens"] = max(max_tokens, 2048)
     resp = requests.post(f"{base_url}/chat/completions", json=payload)
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
-    # GPT-OSS can return null content when reasoning eats the whole budget.
-    # Return empty string so downstream parsing ('in response', .split()) is safe.
     if content is None:
-        return ""
-    # Strip thinking block if present, regardless of the `thinking` flag.
-    # Qwen3 thinking models emit </think> even when asked not to think
-    # (and the OPENING <think> tag is consumed by vLLM's chat template),
-    # so we split on the closing tag alone. Without this, prior agents'
-    # reasoning leaks into subsequent agents' table-chat context. 
-    if "</think>" in content:
-        parts = content.split("</think>", 1)
-        content = parts[1].strip() if len(parts) > 1 else content
-    return content
-
+        return "", ""
+    return content, _strip_think(content)
 
 # ---------------------------------------------------------------------------
 # Run one shoe
@@ -828,8 +841,8 @@ def run_shoe(
         return "\n".join(msgs) if msgs else "(None yet)"
 
     def _call(agent: str, phase: str, channel: str, round_num: int,
-              user_prompt: str, tokens: int = MAX_TOKENS_CHAT,
-              thinking: bool = False) -> str:
+          user_prompt: str, tokens: int = MAX_TOKENS_CHAT,
+          thinking: bool = False) -> str:
         prompt_log.append({
             "agent_name": agent,
             "role": roles[agent],
@@ -839,12 +852,25 @@ def run_shoe(
             "system_prompt": system_prompts[agent],
             "user_prompt": user_prompt,
         })
-        return call_vllm(
+        raw, stripped = call_vllm_with_raw(
             system_prompts[agent], user_prompt,
             base_url=base_url, model=model,
             temperature=temperature, max_tokens=tokens,
             thinking=thinking,
         )
+        # Capture the raw response with <think>...</think> intact for the
+        # leakage screen. The stripped version is what flows into the
+        # public/private channels (preserves the MP5c contamination fix).
+        thinking_messages.append({
+            "agent_name": agent,
+            "role": roles[agent],
+            "phase": phase,
+            "channel": channel,
+            "round": round_num,
+            "raw_response": raw,
+            "had_think_tag": "</think>" in raw,
+        })
+        return stripped
 
     # ══════════════════════════════════════════════════════════════════════
     # Phase 1: Private coordination (collusion only, 4 rounds)
