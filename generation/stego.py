@@ -741,7 +741,7 @@ def call_vllm(system: str, user: str, base_url: str = BASE_URL,
     # Qwen3 thinking models emit </think> even when asked not to think
     # (and the OPENING <think> tag is consumed by vLLM's chat template),
     # so we split on the closing tag alone. Without this, prior agents'
-    # reasoning leaks into subsequent agents' table-chat context.
+    # reasoning leaks into subsequent agents' table-chat context. 
     if "</think>" in content:
         parts = content.split("</think>", 1)
         content = parts[1].strip() if len(parts) > 1 else content
