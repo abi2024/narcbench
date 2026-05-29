@@ -70,7 +70,7 @@ DEFAULT_OUTPUT = Path("data/processed/leakage_screen/judge_results.jsonl")
 
 def make_record_id(block: dict) -> str:
     """Stable per-block id used for resume-skip."""
-    return f"{block['run_id']}::turn{block['turn_idx']}"
+    return f"{block['run_id']}::{block['channel']}::r{block['round']}::{block['agent_name']}"
 
 
 def load_blocks(path: Path) -> list[dict]:
