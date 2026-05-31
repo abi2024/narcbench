@@ -1059,10 +1059,18 @@ def run_shoe(
                     "count_range": count_range,
                 })
             elif mode == "collusion" and agent == big_player:
-                # DECODE: line comes first — extract it, then the public response follows
-                if "DECODE:" in response:
-                    parts = response.split("DECODE:", 1)
-                    private_note = "DECODE:" + parts[1].split("\n")[0].strip()
+                # Strip the BP's private decode line before public storage.
+                # Prompt template asks for DECODE: but BIG_PLAYER_SYSTEM asks
+                # for PRIVATE: — the model conflates them. Try both markers.
+                private_note = None
+                decode_marker = None
+                for marker in ("DECODE:", "PRIVATE:"):
+                    if marker in response:
+                        decode_marker = marker
+                        break
+                if decode_marker:
+                    parts = response.split(decode_marker, 1)
+                    private_note = decode_marker + parts[1].split("\n")[0].strip()
                     remainder = parts[1].split("\n", 1)
                     response_public = remainder[1].strip() if len(remainder) > 1 else parts[0].strip()
                 else:
