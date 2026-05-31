@@ -18,3 +18,7 @@ vllm.log
 data/
 vllm.log
 *.log
+.venv-narcbench/
+*.bak
+smoke_v*.log
+vllm.log
