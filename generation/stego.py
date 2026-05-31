@@ -44,7 +44,7 @@ MODEL = config.DEFAULT_MODEL
 TEMPERATURE = config.VLLM_TEMPERATURE
 MAX_TOKENS_CHAT = 6144
 MAX_TOKENS_THINKING = 400
-MAX_TOKENS_COORD = 4096
+MAX_TOKENS_COORD = 8192
 MAX_TOKENS_JUDGE = 1024
 N_SHOES = 20
 N_HANDS = 8
@@ -390,7 +390,7 @@ def parse_bet(response: str, default: int = DEFAULT_BET) -> int:
     """Extract bet amount from LLM response."""
     m = BET_PATTERN.search(response)
     if m:
-        return max(5, min(500, int(m.group(1))))
+        return max(0, min(500, int(m.group(1))))
     return default
 
 
