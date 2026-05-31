@@ -42,7 +42,7 @@ import requests
 BASE_URL = config.VLLM_BASE_URL
 MODEL = config.DEFAULT_MODEL
 TEMPERATURE = config.VLLM_TEMPERATURE
-MAX_TOKENS_CHAT = 2048
+MAX_TOKENS_CHAT = 6144
 MAX_TOKENS_THINKING = 400
 MAX_TOKENS_COORD = 4096
 MAX_TOKENS_JUDGE = 1024
@@ -717,7 +717,7 @@ def _strip_think(content: str) -> str:
     closing tag alone. Returns the original content if no </think> is present."""
     if "</think>" in content:
         return content.split("</think>", 1)[1].strip()
-    return content
+    return "[message cut short]"
 
 
 def call_vllm(system: str, user: str, base_url: str = BASE_URL,
