@@ -35,7 +35,7 @@ R2_ENDPOINT="https://c08ed3169672bf42db9b0b3ff144f970.r2.cloudflarestorage.com"
 
 # Bucket name (NOT in the credentials I was given — set this explicitly).
 # Override at the command line with: R2_BUCKET=real-bucket-name ./upload_to_r2.sh
-R2_BUCKET="${R2_BUCKET:-narcbench-data}"
+R2_BUCKET="${R2_BUCKET:-cot-pod-sync}"
 
 # Local paths
 REPO_ROOT="${REPO_ROOT:-/workspace/narcbench}"
