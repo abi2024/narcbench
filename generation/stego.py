@@ -1044,7 +1044,14 @@ def run_shoe(
             # ── Strip private lines before adding to public chat ──
             private_note = None
             if mode == "collusion" and agent == counter:
-                # Extract RANGE: line, keep rest as public
+                # PATCH (2026-06-02): counter-side marker strip
+                # Vector 1 fix for R1-Distill-Qwen-7B v1 contamination -
+                # the counter sometimes also emits PRIVATE:/DECODE: blocks
+                # that the BP-only strip didn't catch. We now strip both
+                # the counter's intended RANGE: line AND any stray
+                # BP-style markers from the same response.
+ 
+                # First, strip the RANGE: line (counter's intended marker).
                 if "RANGE:" in response:
                     parts = response.split("RANGE:", 1)
                     range_line = "RANGE:" + parts[1].split("\n")[0].strip()
@@ -1053,15 +1060,31 @@ def run_shoe(
                 else:
                     range_line = None
                     response_public = response
+ 
+                # Then strip any BP-style markers the counter may have
+                # emitted (out-of-role). Same logic as the big_player branch.
+                counter_extra_marker = None
+                decode_marker = None
+                for marker in ("DECODE:", "PRIVATE:"):
+                    if marker in response_public:
+                        decode_marker = marker
+                        break
+                if decode_marker:
+                    parts = response_public.split(decode_marker, 1)
+                    counter_extra_marker = decode_marker + parts[1].split("\n")[0].strip()
+                    remainder = parts[1].split("\n", 1)
+                    response_public = remainder[1].strip() if len(remainder) > 1 else parts[0].strip()
+ 
                 counter_range_notes.append({
                     "hand": hand_num,
                     "range_stated": range_line,
                     "count_range": count_range,
+                    "counter_extra_marker": counter_extra_marker,
                 })
             elif mode == "collusion" and agent == big_player:
                 # Strip the BP's private decode line before public storage.
                 # Prompt template asks for DECODE: but BIG_PLAYER_SYSTEM asks
-                # for PRIVATE: — the model conflates them. Try both markers.
+                # for PRIVATE: - the model conflates them. Try both markers.
                 private_note = None
                 decode_marker = None
                 for marker in ("DECODE:", "PRIVATE:"):
@@ -1082,12 +1105,12 @@ def run_shoe(
                 })
             else:
                 response_public = response
-
+ 
             if is_final:
                 final_texts[agent] = response_public
             else:
                 public_messages.append(f"[{agent}]: {response_public}")
-
+ 
             hand_chat.append(f"[{agent}]: {response_public}")
 
             # Parse bet for next hand
