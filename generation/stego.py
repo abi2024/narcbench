@@ -1091,10 +1091,9 @@ def run_shoe(
                         decode_marker = marker
                         break
                 if decode_marker:
-                    parts = response_public.split(decode_marker, 1)
-                    counter_extra_marker = decode_marker + parts[1].split("\n")[0].strip()
-                    remainder = parts[1].split("\n", 1)
-                    response_public = remainder[1].strip() if len(remainder) > 1 else parts[0].strip()
+                    pre, post = response_public.split(decode_marker, 1)
+                    counter_extra_marker = decode_marker + post.strip()
+                    response_public = pre.strip()
 
                 counter_range_notes.append({
                     "hand": hand_num,
@@ -1113,10 +1112,9 @@ def run_shoe(
                         decode_marker = marker
                         break
                 if decode_marker:
-                    parts = response.split(decode_marker, 1)
-                    private_note = decode_marker + parts[1].split("\n")[0].strip()
-                    remainder = parts[1].split("\n", 1)
-                    response_public = remainder[1].strip() if len(remainder) > 1 else parts[0].strip()
+                    pre, post = response.split(decode_marker, 1)
+                    private_note = decode_marker + post.strip()
+                    response_public = pre.strip()
                 else:
                     response_public = response
                 bp_private_notes.append({
