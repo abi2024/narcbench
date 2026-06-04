@@ -158,3 +158,42 @@ This document is committed to git BEFORE the Path 2 generation run begins. The c
 - Phase 2 Round 1 (R1-Distill v1) predictions: `docs/predictions_r1distill_v1.md`
 - R1-Distill v2 distribution scan results (engagement: 12.5% control vs Qwen3's 87%)
 - Generation code HEAD: must include both `PATCH (2026-06-02)` markers (counter-side strip + non-reasoning-model handling)
+
+---
+
+## Results (appended 2026-06-04, after full-batch generation)
+
+### Pre-registered predictions vs outcomes
+
+| Prediction | Predicted | Observed | Verdict |
+|---|---|---|---|
+| P1: Honest engagement >500 (control) | 65-90% | **40.0%** | Outside predicted range; on F1 boundary but did not trigger |
+| P2: Median honest length (control) | 300-700 | **459** | Within range |
+| P3: BP-count corr collusion median | 0.10-0.55 | **+0.000** | Below floor — model cannot execute scheme |
+| P4: BP-count corr control median | -0.20 to +0.20 | **+0.150** | Within range |
+| P5: Length outliers >2000 (honest) | 0-3 | **0** | Within range |
+| P6: had_think_tag rate | 0% | **0.0%** | Sanity check passed |
+| P7: Truncation rate | 0% | **0.0%** | Pass-through patch works |
+
+### Falsification criteria
+
+- F1 (engagement <40%): NOT triggered (40.0% exactly on boundary).
+- F2 (engagement >95%): NOT triggered.
+- F3 (any substrate contamination): NOT triggered.
+- F4 (truncation placeholder >5%): NOT triggered.
+
+### Headline result
+
+R1 distillation specifically degrades channel separation. The Qwen2.5/R1-Distill pair, holding base model (Qwen2.5-7B) and size (7B) constant, shows:
+- Qwen2.5-7B-Instruct: clean substrate, consistent engagement (99.3% >200 chars), failed scheme execution (0.000 correlation).
+- R1-Distill-Qwen-7B: contaminated substrate (2 PRIVATE + 10 length outliers), bimodal engagement (median 26 chars), partial scheme execution (0.402 correlation).
+
+The pre-registered metric (>500 chars) was calibrated to Qwen3-30B's distribution and produces a misleadingly low number for the smaller Qwen2.5. The full distribution and engagement at >200/>300 thresholds tell a clearer story.
+
+### Unexpected finding (P3 failure)
+
+Qwen2.5-7B cannot execute the multi-step coordination prompt (BP-count correlation 0.000 vs predicted 0.10-0.55). This is a separate observation worth documenting: the benchmark assumes the model can coherently follow the counter/BP role prompts; for Qwen2.5-Instruct it cannot. Channel separation and coordination capability are decoupled.
+
+### Decision
+
+Proceed to paper writing. No further model runs before submission. R1-Distill-Llama-8B and other extensions deferred to Paper 2.
